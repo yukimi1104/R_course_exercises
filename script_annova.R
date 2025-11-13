@@ -101,13 +101,13 @@ plot_line_bw <- function(df, ylab, title) {
         shape = MaternalHost,
         linetype = MaternalHost)
   ) +
-    geom_line(linewidth = 0.7, colour = "black") +
+    geom_line(size = 0.7, colour = "black") +
     geom_errorbar(
       aes(ymin = mean - se, ymax = mean + se),
       width = 0.05,
       colour = "black"
     ) +
-    geom_point(linewidth = 3, colour = "black") +
+    geom_point(size = 3, colour = "black") +
     # Barbarea: dashed line + open circle; Berteroa: solid line + filled circle
     scale_shape_manual(values = c("Barbarea" = 1, "Berteroa" = 16)) +
     scale_linetype_manual(values = c("Barbarea" = "dashed",
