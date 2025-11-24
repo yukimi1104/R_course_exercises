@@ -1,0 +1,160 @@
+# R Script: Eulaema nigrita Abundance Modeling with Negative Binomial GLM 
+
+# --- 0. Load all packages needed ---
+library(car)
+library(MASS)      # for glm.nb
+library(dplyr)     
+library(knitr)
+library(MuMIn)     # for r-squaredGLMM
+library(ggplot2)   
+
+# --- 1. Data Reading and Adjusting ---
+# Read the data file
+dat <- read.csv("Eulaema.csv") 
+
+# Adjust Worldclim variables to standard ecological units:
+# MAT (Mean Annual Temperature): originally x 10, now divided by 10 (Resulting unit: °C)
+# Tseason (Temperature Seasonality) and Pseason (Precipitation Seasonality): 
+# originally x 100, now divided by 100 (Resulting units: SD and CV, respectively)
+dat <- dat %>% 
+  mutate(across(c(Tseason, Pseason), ~ .x / 100)) %>%
+  mutate(across(MAT, ~ .x / 10))
+dat$method <- as.factor(dat$method)
+
+# Define the response variable
+Y <- "Eulaema_nigrita"
+
+# Define the full set of predictor variables for the initial poisson model 
+# This includes all 9 original variables.
+MAM_vars <- c("effort", "altitude", "MAT", "MAP", "Tseason", 
+              "Pseason", "forest.", "lu_het", "method") 
+
+# --- 2. Model Fitting and Selection ---
+
+# Initial Poisson Model 
+mod_poisson <- glm(reformulate(MAM_vars, response = Y), 
+                   family = poisson, 
+                   data = dat)
+
+# Calculate the dispersion ratio
+disp_ratio <- summary(mod_poisson)$deviance / summary(mod_poisson)$df.residual
+print(paste("ratio of dispersion:", round(disp_ratio, 2)))
+
+# Try another model (glm.nb) if overdispersed
+if (disp_ratio > 1.5) {
+  print("use negative binomial distribution to avoid overdispersion")
+  # mod_final: Negative Binomial model fitted to the full set of variables
+  mod_final <- glm.nb(reformulate(MAM_vars, response = Y), data = dat)
+} else {
+  mod_final <- mod_poisson
+}
+
+# Minimal Adequate Model (MAM) selection via backward elimination
+mod_mam <- step(mod_final, direction = "backward", trace = FALSE)
+
+# --- 3. Results Summary ---
+print(summary(mod_mam))
+
+# Assess pseudo r squared
+print("\npseudo r squared")
+r2_mam <- r.squaredGLMM(mod_mam)
+print(r2_mam)
+
+# Get the significant variables and their coefficients
+coefs <- as.data.frame(summary(mod_mam)$coef)
+significant_coefs <- coefs[coefs$`Pr(>|z|)` < 0.05 & rownames(coefs) != "(Intercept)", ]
+print(significant_coefs[, c("Estimate", "Pr(>|z|)")])
+
+
+# --- 4. Prediction Analysis (Mapping Model Terms to Data Columns) ---
+
+# 4.1. Get the terms retained in the final mod_mam
+MAM_Predictors <- attr(terms(mod_mam), "term.labels") 
+
+# 4.2. Identify variables for median calculation and prediction:
+Continuous_vars_in_MAM <- MAM_Predictors[sapply(dat[, MAM_Predictors], is.numeric)]
+Factor_vars_in_MAM <- MAM_Predictors[sapply(dat[, MAM_Predictors], is.factor)] 
+
+# 4.3. Calculate median values for continuous variables
+median_values_df <- dat[, Continuous_vars_in_MAM] 
+median_values <- median_values_df %>%
+  summarise(across(everything(), median))
+
+
+# 4.4. Predict effort effect
+
+effort_range <- seq(min(dat$effort), max(dat$effort), length.out = 100)
+pred_data_effort <- data.frame(effort = effort_range)
+
+# Fill continuous variables with median values
+for (var in Continuous_vars_in_MAM) {
+  if (var != "effort") {
+    pred_data_effort[[var]] <- median_values[[var]]
+  }
+}
+
+# Handle factor variables (set to their mode or reference level for prediction)
+# set factor reference as Net,because "methods" have different levels
+if (length(Factor_vars_in_MAM) > 0) {
+  for (fvar in Factor_vars_in_MAM) {
+    # The reference level is the first level of the factor
+    pred_data_effort[[fvar]] <- factor(levels(dat[[fvar]])[1], levels = levels(dat[[fvar]]))
+  }
+}
+
+# Simulate the predicted value
+pred_data_effort$predicted_count <- predict(mod_mam, newdata = pred_data_effort, type = "response")
+
+
+# 4.5. Predict MAT effect
+
+MAT_range <- seq(min(dat$MAT), max(dat$MAT), length.out = 100)
+pred_data_MAT <- data.frame(MAT = MAT_range)
+
+# Fill continuous variables with median values
+for (var in Continuous_vars_in_MAM) {
+  if (var != "MAT") {
+    pred_data_MAT[[var]] <- median_values[[var]]
+  }
+}
+
+# Handle factor variables refernce
+if (length(Factor_vars_in_MAM) > 0) {
+  for (fvar in Factor_vars_in_MAM) {
+    pred_data_MAT[[fvar]] <- factor(levels(dat[[fvar]])[1], levels = levels(dat[[fvar]]))
+  }
+}
+
+# Simulate the predicted value
+pred_data_MAT$predicted_count <- predict(mod_mam, newdata = pred_data_MAT, type = "response")
+
+
+# --- 5. Generate Plots ---
+# Plot 1: Prediction curve for 'effort'
+plot_effort <- ggplot(pred_data_effort, aes(x = effort, y = predicted_count)) +
+  geom_line(linewidth = 1.2, color = "#0072B2") +
+  labs(
+    title = "Effect of effort on Expected Count of Eulaema_nigrita",
+    subtitle = "Other variables fixed at median/reference level",
+    x = "effort (Log of Sampling Hours)",
+    y = "Expected Count (Eulaema_nigrita)"
+  ) +
+  theme_minimal(base_size = 14) +
+  geom_point(data = dat, aes(x = effort, y = Eulaema_nigrita), alpha = 0.3, size = 1.5)
+
+print(plot_effort)
+
+
+# Plot 2: Prediction curve for 'MAT'
+plot_MAT <- ggplot(pred_data_MAT, aes(x = MAT, y = predicted_count)) +
+  geom_line(linewidth = 1.2, color = "#D55E00") +
+  labs(
+    title = "Effect of MAT on Expected Count of Eulaema_nigrita",
+    subtitle = "Other variables fixed at median/reference level",
+    x = expression(paste("MAT (Mean Annual Temperature - ", degree, "C)")),
+    y = "Expected Count (Eulaema_nigrita)"
+  ) +
+  theme_minimal(base_size = 14) +
+  geom_point(data = dat, aes(x = MAT, y = Eulaema_nigrita), alpha = 0.3, size = 1.5)
+
+print(plot_MAT)
