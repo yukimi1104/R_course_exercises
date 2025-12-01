@@ -1,0 +1,148 @@
+# --- 1. Load Necessary Libraries ---
+library(lme4)
+library(lmerTest)
+library(ggplot2)
+library(dplyr)
+
+# --- 2. Data Preparation ---
+# Load the damselfly data (Assure "damselfly_averages.csv" is in the current working directory)
+damsel_data <- read.csv("damselfly_averages.csv")
+all_vars <- c("WingLength", "TotalLength", "Sex", "Species", "Locale", "Year")
+damsel_data_complete <- na.omit(damsel_data[, all_vars])
+
+# Check the final sample size after removing NA values.
+N_complete <- nrow(damsel_data_complete)
+print(paste("Number of observations used for AIC comparison:", N_complete))
+
+# --- 3. Model Fitting (Maximum Likelihood momdel for AIC comparison) ---
+# There are four models (M1 to M4) chosen.
+# Fixed Effects: TL = TotalLength, S = Sex, P = Species.
+
+# --- M1: baseline model without random effect ---
+# Fixed: WingLength ~ TL + S*P | Random: None
+# LM fitting already uses ML estimation.
+model_lm <- lm(WingLength ~ TotalLength + Sex * Species, 
+                data = damsel_data_complete)
+
+# --- M2: LMM with simple Random Intercept ---
+# Fixed: WingLength ~ TL + S*P | Random: (1|Locale)
+# REML = FALSE is set to ensure Maximum Likelihood estimation.
+model_Locale_ML <- lmer(WingLength ~ TotalLength + Sex * Species + (1|Locale), 
+                        data = damsel_data_complete, REML = FALSE)
+
+# --- M3: LMM with Nested Random Intercept (Parsimonious Fixed Effects) ---
+# Fixed: WingLength ~ TL + S*P | Random: (1|Year/Locale)
+# REML = FALSE is set for valid AIC comparison. 
+model_LocaleYear1_ML <- lmer(WingLength ~ TotalLength + Sex * Species + (1|Year/Locale), 
+                             data = damsel_data_complete, REML = FALSE)
+
+# --- M4: LMM with Nested Random Intercept (Full Fixed Effects) ---
+# Fixed: WingLength ~ TL * S * P | Random: (1|Year/Locale)
+# REML = FALSE is set. This is the complex candidate (full three-way interaction).
+model_LocaleYear2_ML <- lmer(WingLength ~ TotalLength * Sex * Species + (1|Year/Locale), 
+                            data = damsel_data_complete, REML = FALSE)
+
+# --- 4. AIC Comparison and Model Selection ---
+# The AIC function automatically extracts the ML-derived AIC values (when REML=FALSE)
+print("--- AIC Comparison Table (ML Estimation) ---")
+aic_results <- AIC(model_lm, model_Locale_ML, model_LocaleYear1_ML, model_LocaleYear2_ML)
+print(aic_results)
+# Add logLik to the results table
+aic_results$logLik <- sapply(list(model_lm, model_Locale_ML, model_LocaleYear2_ML, model_LocaleYear1_ML), logLik)
+
+print(aic_results)
+# Calculate Delta AIC (dAIC) and Akaike Weights (wi) for interpretation
+min_aic <- min(aic_results$AIC)
+aic_results$dAIC <- aic_results$AIC - min_aic
+aic_results$weight <- exp(-0.5 * aic_results$dAIC) / sum(exp(-0.5 * aic_results$dAIC))
+print("--- Full Model Selection Table ---")
+# Reorder columns to match requested format (df, AIC, logLik, dAIC, weight)
+aic_results <- aic_results %>% 
+  select(df, AIC, logLik, dAIC, weight) %>%
+  arrange(AIC)
+
+print(aic_results)
+
+
+# --- 5. Visualization of the Parsimonious Supported Model (M3) ---
+
+# The visualization plots the predicted fixed effects from the highly supported model (M3) 
+# over the raw data points. M3 assumes parallel slopes across groups.
+
+# Extract fixed effects coefficients from the M3 model
+coeffs <- coef(summary(model_LocaleYear2_ML))
+intercept <- coeffs[1, 1]              # (Intercept)
+slope_TL <- coeffs[2, 1]               # TotalLength slope (common to all groups)
+effect_Male <- coeffs[3, 1]            # SexMale effect
+effect_Ischnura <- coeffs[4, 1]        # SpeciesIschnura_elegans effect
+effect_Male_Ischnura <- coeffs[5, 1]   # SexMale:SpeciesIschnura_elegans interaction
+
+# Calculate the intercept for each of the four groups:
+# 1. Female Enallagma (Base Group)
+int_FE <- intercept
+# 2. Male Enallagma (Base + Sex Male)
+int_ME <- intercept + effect_Male
+# 3. Female Ischnura (Base + Species Ischnura)
+int_FI <- intercept + effect_Ischnura
+# 4. Male Ischnura (Base + Sex Male + Species Ischnura + Interaction)
+int_MI <- intercept + effect_Male + effect_Ischnura + effect_Male_Ischnura
+
+# Create the final plot
+ggplot(data = damsel_data_complete, 
+       aes(x = TotalLength, y = WingLength, color = interaction(Sex, Species))) +
+  
+  # Add raw data points (using the clean data)
+  geom_point(alpha = 0.1) +
+  
+  # Add the predicted regression line for each group (parallel slopes)
+  # The hue_pal()(4) function generates 4 distinct colors for the 4 groups.
+  
+  # Line 1: Female Enallagma
+  geom_abline(intercept = int_FE, slope = slope_TL, lty = 1, color = scales::hue_pal()(4)[1]) +
+  
+  # Line 2: Male Enallagma
+  geom_abline(intercept = int_ME, slope = slope_TL, lty = 1, color = scales::hue_pal()(4)[2]) +
+  
+  # Line 3: Female Ischnura
+  geom_abline(intercept = int_FI, slope = slope_TL, lty = 1, color = scales::hue_pal()(4)[3]) +
+  
+  # Line 4: Male Ischnura
+  geom_abline(intercept = int_MI, slope = slope_TL, lty = 1, color = scales::hue_pal()(4)[4]) +
+  
+  labs(
+    title = "Wing-Body Allometry (Predicted by LMM M3)",
+    x = "Total Length (mm)",
+    y = "Wing Length (mm)",
+    color = "Group (Sex:Species)" # Label for the legend
+  ) +
+  theme_classic() +
+  theme(legend.position = "top") +
+  guides(color = guide_legend(ncol = 2, title.position = "top", title.hjust = 0.5))
+
+# Optional: Print summary of the best supported parsimonious model (M3) for full inference
+print("--- Summary of the Best Parsimonious Model (M3) ---")
+print(summary(model_LocaleYear1_ML))
+
+# --- 7. Final Model (M3) Fixed Effects Table Generation ---
+
+# We choose M3 (model_LocaleYear2_ML) as the best parsimonious model (dAIC < 2).
+# We extract its fixed effects and format them for the final report.
+
+# Extract the fixed effects table (coefficients, SE, df, t, p)
+m3_fixed_summary <- as.data.frame(coef(summary(model_LocaleYear2_ML)))
+m3_fixed_summary <- m3_fixed_summary %>% 
+  # Use rownames as the variable name
+  mutate(Term = rownames(m3_fixed_summary)) %>%
+  # Rename columns for clarity (using the standard output names)
+  rename(
+    Estimate = Estimate,
+    Std_Error = 'Std. Error',
+    DF = df,
+    t_Value = 't value',
+    Pr_t = 'Pr(>|t|)'
+  ) %>%
+  # Select and reorder columns
+  select(Term, Estimate, Std_Error, DF, t_Value, Pr_t)
+
+print("--- Fixed Effects Coefficients Table for Model M3 ---")
+print(m3_fixed_summary)
