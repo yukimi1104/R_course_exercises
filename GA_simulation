@@ -1,0 +1,100 @@
+#In this question Elitism Selection is employed
+#It guarantees a specific number of the fittest chromosomes (called elites) 
+#Elites are carried over unchanged from one generation to the next. 
+#In this case, I only choose the fittest one as elite.
+rm(list=ls())
+set.seed(37)
+pop_size<-50    # Population size n=50
+generation_min<-50  # Minimum 50 generations
+mutation_rate<-0.1  # Mutation rate
+x_min<--3        # Gene range
+x_max<-3
+y_min<--3
+y_max<-3
+objective_function <- function(x,y) {
+  g <-(1-x)^2 +100*(y-x^2)^2+2*sin(3*x)
+  return(g)
+}
+# negative function of non-convex formula to find best fitness
+fitness_function <- function(g_value) {
+  return(-g_value)
+}
+modified_crossover <- function(parent1, parent2, mutation_rate=0.1, x_min=-3, x_max=3,y_min=-3, y_max=3) {
+  L<-length(parent1)#In the test question case, L=2,actually crossover site can only be 1
+  if (L <= 1) {
+    offspring_gene <- parent1
+  } else {
+    crossover_point <- sample.int(L-1,1)
+    offspring_gene <- rep(0,L)
+    # genes from Parent 1 from start to crossover_point
+    offspring_gene[1:crossover_point] <- parent1[1:crossover_point]
+    # genes from Parent 2 from crossover_point+1 to end
+    offspring_gene[(crossover_point+1):L] <- parent2[(crossover_point+1):L]
+  }  
+  #sampling randomly about mutation rate,if mutates choose the new value inside the range
+  #actually in test question,there could only be vector(x,y) as 2 gene in chromosome
+  for(i in 1:L){
+    if(runif(1) < mutation_rate){
+      if(i==1){ 
+        offspring_gene[i]<-runif(1,x_min,x_max) 
+      } else if (i==2) { 
+        offspring_gene[i]<-runif(1,y_min,y_max)
+      } 
+    }
+  }
+  return(offspring_gene)
+}
+# Selects two parents based on fitness
+rank_selection <- function(fitness) {
+# The default ranking order is increasing.
+  ranks <- rank(fitness)
+# higher fitness individuals have more possibility of being selected
+  ranks_prob<- ranks/sum(ranks)
+  parents_index<- sample(1:pop_size, 2, replace=FALSE, prob=ranks_prob)
+  return(parents_index)
+}
+# Initiate population matrix
+population <- matrix(0, nrow = pop_size, ncol = 2) 
+new_population <- matrix(0, nrow = pop_size, ncol = 2)
+# Randomly initialize x and y within the domain [-3, 3]
+population[, 1] <- runif(pop_size, x_min, x_max) 
+population[, 2] <- runif(pop_size, y_min, y_max) 
+#Initiate vector for gene fitness of different generations
+mean_g_values <- rep(0, (2*generation_min))
+best_g_values <- rep(0, (2*generation_min))
+#Simulation
+for (generation in 1:(2*generation_min)) {
+#take out one row for the function
+  current_g_values <- apply(population, 1, function(p)objective_function(p[1], p[2]))
+  current_fitnesses <- fitness_function(current_g_values) 
+  mean_g_values[generation] <- mean(current_g_values)
+  best_g_values[generation] <- min(current_g_values) 
+  #keep the minimum g values as elicit ones
+  best_index <- which.min(current_g_values) 
+  new_population[1, ] <- population[best_index, ]
+  for (i in 2:pop_size) {
+    # Selection higher fitness parents
+    parents_index <- rank_selection(current_fitnesses)
+    parent1 <- population[parents_index[1], ]
+    parent2 <- population[parents_index[2], ]
+    # Recombination and mutation
+    offspring <- modified_crossover(parent1, parent2)
+    # Replacement
+    new_population[i, ] <- offspring
+  }
+  # Update population for the next generation 
+  population <- new_population
+}
+#Visualization
+plot(1:(2*generation_min), mean_g_values, type = 'l', col = 'blue', 
+     ylim = range(c(mean_g_values, best_g_values)),
+     xlab = "Generations", 
+     ylab = "Objective Function g(x,y)", 
+     main = "GA Optimization: Finding Mean and Best Objective Value g(x,y)")
+#add lines of best objective function
+lines(1:(2*generation_min), best_g_values, type = 'l', col = 'red', lwd = 2)
+#add legend
+legend("topright", 
+       legend = c("Mean g(x,y)", "Best g(x,y)"), 
+       col = c("blue", "red"), 
+       lty = 1, lwd = c(1, 2))
